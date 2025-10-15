@@ -1,0 +1,12 @@
+flask
+dapytains @ git+https://github.com/distributed-text-services/MyDapytains
+requests
+tqdm
+beautifulsoup4
+elasticsearch==8.11.0
+flask-cors
+unidecode
+py-anycase
+saxonche==12.9.0
+python-dotenv
+gunicorn
