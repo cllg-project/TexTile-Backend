@@ -82,9 +82,33 @@ GET /collections/list/
 
 - **Flask** - Web framework
 - **Elasticsearch 8.11.0** - Search engine
-- **DaProfileurPyTaInss** - DTS protocol implementation
+- **MyDapytains** - Python implementation of the Distributed Text Services (DTS) API. See https://github.com/distributed-text-services/MyDapytains for details.
 - **SaxonCHE** - XSL transformations for TEI
 - **BeautifulSoup4** - HTML/XML parsing
 
+## 📡 DTS API
 
-**Note**: This works with Gunicorn but fails with waitress
+
+- Entry point
+```http
+GET /
+```
+Returns JSON-LD entrypoint with URITemplates for collection, navigation and document resources.
+
+- Collection view
+```http
+GET /collection/?id=<collection_id>&nav=<children|parents>
+```
+Parameters: `id` (optional; when omitted returns the top-level/root collection), `nav` (optional, `children` by default).
+
+- Navigation view
+```http
+GET /navigation/?resource=<collection_id>&ref=<ref>&start=<start>&end=<end>&tree=<tree>&down=<int>
+```
+Parameters: `resource` (required), provide either `ref` or `start`+`end` to select a citable unit or range; `tree` picks the citation tree; `down` controls depth (integer). Returns JSON(-LD) Navigation responses.
+
+- Document view
+```http
+GET /document/?resource=<collection_id>&ref=<ref>&start=<start>&end=<end>&tree=<tree>&mediaType=<mime-type>
+```
+Parameters: `resource` (required), `ref` or `start`+`end`, optional `tree`. `mediaType` requests a transformed representation when supported (default returns TEI XML).
