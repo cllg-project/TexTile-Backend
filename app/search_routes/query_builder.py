@@ -94,7 +94,19 @@ def build_search_query(
         # Quoted phrase
         if part.startswith('"') and part.endswith('"'):
             phrase = part.strip('"')
-            clause = {"match_phrase": {field: {"query": phrase, "boost": base_boost}}}
+            # Case 1: wildcard in phrase → use wildcard query
+            if "*" in phrase:
+                # If pattern ends with '*' and only at the end → use prefix (much faster)
+                if phrase.endswith("*") and phrase.count("*") == 1:
+                    value = phrase[:-1]  # strip the star
+                    clause = {"prefix": {field: {"value": value, "boost": base_boost}}}
+                else:
+                    # General wildcard (slower)
+                    clause = {"wildcard": {field: {"value": phrase.lower(), "boost": base_boost}}}
+        
+            # Case 2: normal quoted string → match_phrase
+            else:
+                clause = {"match_phrase": {field: {"query": phrase, "boost": base_boost}}}
 
         else:
             # Expand variants
