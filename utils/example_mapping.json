@@ -1,0 +1,18 @@
+[
+  ["/TEI/tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", "dublinCore/title"],
+  ["//tei:titleStmt/tei:respStmt[resp='Projet Leader']/tei:persName", "dublinCore/creator"],
+  ["//tei:titleStmt/tei:respStmt[resp!='Projet Leader']/tei:persName", "dublinCore/contributor"],
+  ["//tei:titleStmt/tei:respStmt/tei:orgName", "dublinCore/contributor"],
+
+  ["//tei:sourceDesc/tei:msDesc/tei:msIdentifier/tei:msName/tei:idno", "dublinCore/identifier"],
+  ["//tei:teiHeader/tei:fileDesc/tei:publicationStmt/tei:publisher", "dublinCore/publisher"],
+  ["//tei:teiHeader/tei:fileDesc/tei:publicationStmt/tei:availability/licence/@target", "dublinCore/license"],
+  ["//tei:teiHeader/tei:fileDesc/tei:publicationStmt/tei:date/@when", "dublinCore/issued"],
+  ["//tei:teiHeader/tei:fileDesc/tei:publicationStmt/tei:ptr/@target", "dublinCore/relation"],
+  ["//tei:sourceDesc/tei:msDesc/tei:msContents/tei:msItem/tei:docDate/tei:origDate", {
+    "target": "dublinCore/created",
+    "replace": [["--", "/"]]
+  }],
+  ["//tei:sourceDesc/tei:msDesc/tei:msContents/tei:msItem/tei:textLang/@mainLang",  {"target": "dublinCore/language", "split": " "}],
+  ["//tei:sourceDesc/tei:msDesc/tei:msContents/tei:msItem/tei:textLang/@otherLangs", {"target": "extension/otherLanguage", "split": " "}]
+]
