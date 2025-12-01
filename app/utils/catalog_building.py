@@ -237,18 +237,6 @@ def catalog_to_xml(data: Dict[str, Dict]) -> str:
         treat_level(level, members_root)
 
     return et.tostring(root, encoding=str)
-    #                 manifest = entry.get("manifest_url", "")
-    #                 if manifest:
-    #                     ET.SubElement(dc, "source", {"xmlns": "http://purl.org/dc/terms/"}).text = manifest
-    #
-    #                 token_count = entry.get("tokens")
-    #                 if token_count is not None:
-    #                     ET.SubElement(dc, "description", {"xmlns": "http://purl.org/dc/terms/"}).text = f"Token count: {token_count}"
-    #
-    # # Beautify XML
-    # xml_str = ET.tostring(root, encoding='unicode')
-    # dom = xml.dom.minidom.parseString(xml_str)
-    # return dom.toprettyxml(indent="  ")
 
 
 def build_catalog_dict(collections: Dict[str, Dict], links: Set[Tuple[str, str]]) -> Dict[str, Dict]:
