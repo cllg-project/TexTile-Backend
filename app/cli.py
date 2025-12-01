@@ -23,6 +23,19 @@ from dapytains.app.database import db
 from .transformation import media_transformer
 from .constants import basedir
 
+import hashlib
+
+
+def file_hash(path: str, algorithm: str = "sha256") -> str:
+    h = hashlib.new(algorithm)
+    buffer_size = 1024 * 1024  # read in 1 MB chunks
+
+    with open(path, "rb") as f:
+        while chunk := f.read(buffer_size):
+            h.update(chunk)
+
+    return h.hexdigest()
+
 
 @click.group("db")
 def db_group():
@@ -43,15 +56,6 @@ def db_reset():
         db.create_all()
 
 
-@db_group.command("count-children")
-def count_children():
-    """ Populate nb_children """
-    with current_app.app_context():
-        for coll in Collection.query.all():
-            coll.nb_children = coll.total_children
-        db.session.commit()
-
-
 @db_group.command("count-manuscripts")
 def count_manuscripts():
     """ Count total number of manuscripts (resources) in the database """
@@ -67,13 +71,54 @@ def data_group():
     return
 
 
-@data_group.command("catalog-ingest")
+@data_group.group("catalog")
+def catalog_group():
+    """Commands related to the catalog """
+    return
+
+
+from .utils.catalog_building import build as build_catalog
+
+
+catalog_group.add_command(build_catalog)
+
+
+@catalog_group.command("ingest")
 @click.argument("catalog_filepath", type=click.Path(file_okay=True, dir_okay=False, readable=True))
 def ingest(catalog_filepath):
     """Ingest the catalog file to store in the database """
     with current_app.app_context():
         catalog, _ = parse(catalog_filepath)
         store_catalog(catalog)
+
+        for coll in Collection.query.all():
+            coll.nb_children = coll.total_children
+        db.session.commit()
+
+
+@data_group.command("move-filepaths")
+@click.argument("target", type=str)
+@click.argument("replacement", type=str)
+def replace_filepaths(target: str, replacement: str):
+    """
+    Replace TARGET with REPLACEMENT in all Collection.filepath entries.
+    Particularly useful if you compile outside of a docker instance.
+
+    Example:
+        flask data move-filepaths "/old/prefix" "/new/prefix"
+    """
+    from dapytains.app.database import Collection
+    from sqlalchemy import func
+    
+    with current_app.app_context():
+        stmt = (
+            Collection.__table__.update()
+            .where(Collection.filepath.op('LIKE')(f"%{target}%"))
+            .values(filepath=func.replace(Collection.filepath, target, replacement))
+        )
+        result = db.session.execute(stmt)
+        db.session.commit()
+        click.echo(f"Updated {result.rowcount} Collection.filepath entries (bulk).")
 
 
 def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
@@ -102,6 +147,8 @@ def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
         # Retrieve navigation and collection objects
         navigation = Navigation.query.get(navigation_id)
         collection = Collection.query.get(navigation.collection_id)
+
+        sha = file_hash(collection.filepath)
 
         # Iterate over references in navigation
         for tree, references in navigation.references.items():
@@ -139,7 +186,7 @@ def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
                             media=media_type, tree=tree, content=transformed_content
                         )
                         rendered_content += 1
-    return rendered_content
+    return navigation.collection_id, sha, rendered_content
 
 @data_group.group("prerender")
 def prerender_group():
@@ -169,12 +216,17 @@ def prerender(media_type: List[str], workers: int, force: bool):
 
     mss = 0
     pages = 0
+    hashs = {}
     with multiprocessing.Pool(processes=num_workers) as pool:
-        for generated in pool.imap_unordered(_prerender_collection, [(nav_id, media_type, force) for nav_id in navigations]):
+        for collection_id, sha, generated in pool.imap_unordered(_prerender_collection, [(nav_id, media_type, force) for nav_id in navigations]):
             pages += generated
             mss += 1
+            hashs[collection_id] = sha
             pbar.update(1)
             pbar.set_description(f"Manuscripts done: {mss}. Pages cached: {pages} ({pages/pbar.format_dict['elapsed']:.2f} p/s).")
+
+    with open("shas.json", "w") as f:
+        json.dump(hashs, f)
 
 
 def process_cache(navigation_id: int) -> List[Dict]:
