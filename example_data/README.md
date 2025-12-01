@@ -34,3 +34,10 @@ PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data prerender generat
 ```
 
 ## Feeding the search engine
+
+## If you are migrating to a docker instance or another disk space
+
+```sh
+PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data move-filepaths \
+	/home/tclerice/dev/CoMMA-fasttext/ /home/tclerice/CoMMA-fasttext/
+```

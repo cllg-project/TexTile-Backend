@@ -96,6 +96,31 @@ def ingest(catalog_filepath):
         db.session.commit()
 
 
+@data_group.command("move-filepaths")
+@click.argument("target", type=str)
+@click.argument("replacement", type=str)
+def replace_filepaths(target: str, replacement: str):
+    """
+    Replace TARGET with REPLACEMENT in all Collection.filepath entries.
+    Particularly useful if you compile outside of a docker instance.
+
+    Example:
+        flask data move-filepaths "/old/prefix" "/new/prefix"
+    """
+    from dapytains.app.database import Collection
+    from sqlalchemy import func
+    
+    with current_app.app_context():
+        stmt = (
+            Collection.__table__.update()
+            .where(Collection.filepath.op('LIKE')(f"%{target}%"))
+            .values(filepath=func.replace(Collection.filepath, target, replacement))
+        )
+        result = db.session.execute(stmt)
+        db.session.commit()
+        click.echo(f"Updated {result.rowcount} Collection.filepath entries (bulk).")
+
+
 def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
     """
     Prerenders passages for a given navigation ID and set of media types.
