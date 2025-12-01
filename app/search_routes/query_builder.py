@@ -8,13 +8,13 @@ import functools
 SearchMode = Literal["exact", "fuzzy", "partial"]
 
 VARIANTS = {}
-with open(f"{basedir}/variants.csv") as f:
-    reader = csv.DictReader(f, delimiter="\t")
-    for row in reader:
-        # print(row)
-        if row["from"] not in VARIANTS:
-            VARIANTS[row["from"]] = []
-        VARIANTS[row["from"]].append(row["to"])
+# with open(f"{basedir}/variants.csv") as f:
+#     reader = csv.DictReader(f, delimiter="\t")
+#     for row in reader:
+#         # print(row)
+#         if row["from"] not in VARIANTS:
+#             VARIANTS[row["from"]] = []
+#         VARIANTS[row["from"]].append(row["to"])
 
 
 def generate_variants(
