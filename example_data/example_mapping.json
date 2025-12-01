@@ -1,5 +1,5 @@
 [
-  ["/TEI/tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", "dublinCore/title"],
+  ["/tei:TEI/tei:teiHeader/tei:fileDesc/tei:titleStmt/tei:title", "dublinCore/title"],
   ["//tei:titleStmt/tei:respStmt[resp='Projet Leader']/tei:persName", "dublinCore/creator"],
   ["//tei:titleStmt/tei:respStmt[resp!='Projet Leader']/tei:persName", "dublinCore/contributor"],
   ["//tei:titleStmt/tei:respStmt/tei:orgName", "dublinCore/contributor"],
