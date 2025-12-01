@@ -5,7 +5,7 @@
 ## Building the catalog
 
 ```sh
-PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data catalog build \
+PRERENDER_DIR=/var/cache_tei FLASKAPP=app flask data catalog build \
 	"./example_data/*/*.xml" \
 	--mapping ./example_data/example_mapping.json \
 	--external-metadata ./example_data/example_metadata.json \
@@ -15,20 +15,20 @@ PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data catalog build \
 ## Creating the database
 
 ```sh
-PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask db create
+PRERENDER_DIR=/var/cache_tei FLASKAPP=app flask db create
 ```
 
 ## Ingesting the catalog
 
 ```sh
-PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data catalog ingest \
+PRERENDER_DIR=/var/cache_tei FLASKAPP=app flask data catalog ingest \
 	example_data/catalog.xml
 ```
 
 ## Building the pre-render (Can be long)
 
 ```sh
-PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data prerender generate \
+PRERENDER_DIR=/var/cache_tei FLASKAPP=app flask data prerender generate \
 	--media-type html \
 	--workers 24
 ```
@@ -38,6 +38,6 @@ PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data prerender generat
 ## If you are migrating to a docker instance or another disk space
 
 ```sh
-PRERENDER_DIR=/home/tclerice/cache_tei FLASKAPP=app flask data move-filepaths \
-	/home/tclerice/dev/CoMMA-fasttext/ /home/tclerice/CoMMA-fasttext/
+PRERENDER_DIR=/var/cache_tei FLASKAPP=app flask data move-filepaths \
+	/var/cache_tei/ /var/prod/cache_tei/
 ```
