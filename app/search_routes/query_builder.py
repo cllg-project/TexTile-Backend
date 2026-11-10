@@ -94,15 +94,17 @@ def build_search_query(
         # Quoted phrase
         if part.startswith('"') and part.endswith('"'):
             phrase = part.strip('"')
-            # Case 1: wildcard in phrase → use wildcard query
+            # Case 1: wildcard in phrase → use match_phrase_prefix
             if "*" in phrase:
-                # If pattern ends with '*' and only at the end → use prefix (much faster)
-                if phrase.endswith("*") and phrase.count("*") == 1:
-                    value = phrase[:-1]  # strip the star
-                    clause = {"prefix": {field: {"value": value, "boost": base_boost}}}
-                else:
-                    # General wildcard (slower)
-                    clause = {"wildcard": {field: {"value": phrase.lower(), "boost": base_boost}}}
+                phrase_for_prefix = phrase.rstrip('*').rstrip()
+                clause = {
+                    "match_phrase_prefix": {
+                        field: {
+                            "query": phrase_for_prefix,
+                            "boost": base_boost
+                        }
+                    }
+                }
         
             # Case 2: normal quoted string → match_phrase
             else:
@@ -118,7 +120,18 @@ def build_search_query(
             # Base term (user-typed)
             if mode == "exact":
                 if "*" in part:
-                    variant_clauses.append({"wildcard": {field: {"value": part, "boost": base_boost}}})
+                    if " " in part:
+                        phrase_for_prefix = part.rstrip('*').rstrip()
+                        variant_clauses.append({
+                            "match_phrase_prefix": {
+                                field: {
+                                    "query": phrase_for_prefix,
+                                    "boost": base_boost
+                                }
+                            }
+                        })
+                    else:
+                        variant_clauses.append({"wildcard": {field: {"value": part, "boost": base_boost, "case_insensitive": True}}})
                 else:
                     variant_clauses.append({"match": {field: {"query": part, "operator": "and", "boost": base_boost}}})
             elif mode == "fuzzy":
