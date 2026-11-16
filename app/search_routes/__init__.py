@@ -98,14 +98,21 @@
 
 
 def add_search_routes(app):
-    from .catalog_search import manuscripts_route, manuscripts_language_route, manuscripts_date_route, manuscripts_range_route
+    from .catalog_search import manuscripts_route, manuscripts_language_route, manuscripts_date_route, manuscripts_range_route, manuscripts_facets_route
     from .text_search import search_route, hybrid_search_route
-    from .manuscript_stats import manuscripts_count_route, collections_list_route
+    from .concordance import concordance_route
+    from .term_stats import stats_route
+    from .manuscript_stats import manuscripts_count_route, collections_list_route, manuscripts_list_route, collections_search_route
     app.add_url_rule('/search/', 'search_route', search_route)
+    app.add_url_rule('/concordance/', 'concordance_route', concordance_route)
+    app.add_url_rule('/concordance/stats/', 'term_stats_route', stats_route)
     app.add_url_rule("/manuscripts/date/", "manuscripts_date_route", manuscripts_date_route)
     app.add_url_rule("/manuscripts/language/", "manuscripts_language_route", manuscripts_language_route)
     app.add_url_rule("/manuscripts/range/", "manuscripts_range_route", manuscripts_range_route)
     app.add_url_rule("/manuscripts/count/", "manuscripts_count_route", manuscripts_count_route)
+    app.add_url_rule("/manuscripts/list/", "manuscripts_list_route", manuscripts_list_route)
+    app.add_url_rule("/collections/search/", "collections_search_route", collections_search_route)
     app.add_url_rule("/collections/list/", "collections_list_route", collections_list_route)
     app.add_url_rule("/search/hybrid/", "hybrid_search_route", hybrid_search_route)
+    app.add_url_rule("/manuscripts/facets/", "manuscripts_facets_route", manuscripts_facets_route)
     app.add_url_rule("/manuscripts/", "manuscripts_route", manuscripts_route)

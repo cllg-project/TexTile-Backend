@@ -177,3 +177,10 @@ compose.local.yaml
 .env
 .env.*.local
 .env.production
+
+# Generated data (see example_data/README.md)
+cache/
+shas.json
+app.db
+example_data/refs.json
+example_data/catalog.xml

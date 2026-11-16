@@ -1,12 +1,4 @@
-import io
-import csv
-import itertools
-
-from typing import Literal, Dict, Any, List
-
-from flask import request, jsonify, Response, stream_with_context
-
-from dapytains.app.database import Collection
+from flask import request, jsonify
 
 from .config import _get_document_title, es, INDEX
 from .query_builder import build_search_query
@@ -16,133 +8,11 @@ def get_vector_model():
     return None
 
 
-def search_route_csv():
-    q = (request.args.get("q") or "").strip()
-    size = request.args.get("size", 25, type=int)
-    mode = request.args.get("mode", "exact")
-    resource = request.args.get("resource", type=str)
-    language = request.args.get("language", type=str)
-    if mode not in {"exact", "fuzzy", "partial"}:
-        mode = "exact"
-    if not q:
-        return jsonify({"total": 0, "items": []})
-
-    # Customize query if needed
-    query = build_search_query(q, mode=mode).get("query", {})
-
-    filters = []
-    if resource:
-        filters.append({"term": {"collection": resource}})
-    if language:
-        filters.append({"term": {"language": language}})
-    
-    if filters:
-        # wrap the query in a bool query with filters
-        query = {
-            "bool": {
-                "must": query,
-                "filter": filters if len(filters) > 1 else filters[0]
-            }
-        }
-
-    size = 50  # batch size per page
-
-    # 1️⃣ Open a point-in-time (PIT)
-    pit = es.open_point_in_time(index=INDEX, keep_alive="2m")
-    pit_id = pit["id"]
-
-    def generate():
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["collection", "ref", "title", "coverage", "content_line"])
-        yield output.getvalue()
-        output.seek(0)
-        output.truncate(0)
-
-        search_after = None
-        total_fetched = 0
-
-        while True:
-            # 2️⃣ Build query body for PIT + pagination
-            body = {
-                "size": size,
-                "query": query,
-                "pit": {"id": pit_id, "keep_alive": "2m"},
-                "sort": [{"_shard_doc": "asc"}],  # required for search_after
-                "highlight": {
-                    "fields": {
-                        "content*": {"fragment_size": 160, "fragmenter": "simple"},
-                        # "content.ngram": {"fragment_size": 160},
-                    },
-                    "pre_tags": ["<hit>"],
-                    "post_tags": ["</hit>"],
-                },
-                "_source": [
-                    "collection",
-                    "ref",
-                    "content",
-                ],
-            }
-
-            if search_after:
-                body["search_after"] = search_after
-
-            res = es.search(body=body)
-            hits = res["hits"]["hits"]
-
-            if not hits:
-                break  # done
-
-            for hit in hits:
-                src = hit["_source"]
-                highlights = []
-
-                if "highlight" in hit:
-                    if "content" in hit["highlight"]:
-                        highlights.extend(hit["highlight"]["content"])
-                    if "content.ngram" in hit["highlight"]:
-                        highlights.extend(hit["highlight"]["content.ngram"])
-
-                # Fallback: split raw content into lines
-                if not highlights and "content" in src:
-                    highlights = src["content"].splitlines()
-
-                collection = Collection.query.filter_by(identifier=src.get("collection")).first()
-
-
-                for line in highlights:
-                    writer.writerow([
-                        src.get("collection", ""),
-                        src.get("ref", ""),
-                        src.get("title", ""),
-                        collection.dublinCore.get("coverage", ""),
-                        line.strip(),
-                    ])
-                    yield output.getvalue()
-                    output.seek(0)
-                    output.truncate(0)
-
-            total_fetched += len(hits)
-            search_after = hits[-1]["sort"]
-
-        # 3️⃣ Clean up PIT
-        es.close_point_in_time(body={"id": pit_id})
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype="text/csv",
-        headers={
-            "Content-Disposition": "attachment; filename=comma-search.csv",
-            "X-Accel-Buffering": "no",  # Disable Nginx buffering (alternative)
-            "Cache-Control": "no-cache",
-            "Transfer-Encoding": "chunked"
-        }
-    )
-
-
 def search_route():
     if request.args.get("format") == "csv":
-        return search_route_csv()
+        # Same query and filters as the search, exported as a streamed concordance
+        from .concordance import concordance_route
+        return concordance_route()
     q = (request.args.get("q") or "").strip()
     resource = request.args.get("resource")  # limits to one doc if present
     language = request.args.get("language")

@@ -1,4 +1,7 @@
-from flask import jsonify, url_for
+from flask import current_app, jsonify, request, url_for
+
+from . import hierarchy
+from .text import fold
 from dapytains.app.database import Collection
 
 
@@ -15,6 +18,7 @@ def manuscripts_count_route():
             "source": "database"
         })
     except Exception as e:
+        current_app.logger.exception("%s failed", request.path)
         return jsonify({
             "error": f"Database error: {str(e)}",
             "total_manuscripts": 0
@@ -27,7 +31,6 @@ def collections_list_route():
     Returns collection names, identifiers, and URLs
     Supports optional 'q' parameter for filtering by title
     """
-    from flask import request
     
     try:
         # Get optional query parameter for filtering
@@ -58,8 +61,8 @@ def collections_list_route():
         # Build lightweight response
         collection_list = []
         for collection in collections:
-            # Build URL manually to avoid url_for issues
-            collection_url = f"/collection/?id={collection.identifier}"
+            # Relative to the public address (path prefix included)
+            collection_url = f"{request.script_root}/collection/?id={collection.identifier}"
             
             collection_data = {
                 "identifier": collection.identifier,
@@ -76,8 +79,92 @@ def collections_list_route():
         })
         
     except Exception as e:
+        current_app.logger.exception("%s failed", request.path)
         return jsonify({
             "error": f"Database error: {str(e)}",
             "collections": [],
             "total": 0
         }), 500
+
+
+def manuscripts_list_route():
+    """
+    Lightweight, paginated list of manuscripts (resources) for the catalog autocomplete.
+    Supports 'q' (title filter, case- and diacritics-insensitive), 'limit' and 'page'.
+    """
+    try:
+        query = request.args.get('q', '').strip()
+        limit = max(1, min(request.args.get('limit', 20, type=int), 200))
+        page = max(1, request.args.get('page', 1, type=int))
+
+        manuscripts = hierarchy.manuscripts()
+        if query:
+            needle = fold(query)
+            manuscripts = [m for m in manuscripts if needle in fold(m.title)]
+
+        total = len(manuscripts)
+        start = (page - 1) * limit
+        items = [
+            {
+                "identifier": m.identifier,
+                "title": m.title,
+                "url": f"{request.script_root}/collection/?id={m.identifier}",
+            }
+            for m in manuscripts[start:start + limit]
+        ]
+
+        return jsonify({
+            "manuscripts": items,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "query": query if query else None
+        })
+    except Exception as e:
+        current_app.logger.exception("%s failed", request.path)
+        return jsonify({
+            "error": f"Database error: {str(e)}",
+            "manuscripts": [],
+            "total": 0
+        }), 500
+
+
+def collections_search_route():
+    """
+    Paginated search over collections (not manuscripts), at any depth.
+    Params: q (matches title and description, case/diacritics-insensitive; all terms must match),
+            within (limits to a sub-tree), page, size.
+    """
+    try:
+        query = request.args.get('q', '').strip()
+        size = max(1, min(request.args.get('size', 20, type=int), 100))
+        page = max(1, request.args.get('page', 1, type=int))
+
+        found = hierarchy.collections()
+
+        within = request.args.get('within', '').strip()
+        if within:
+            below = hierarchy.descendants(within)
+            allowed = below[0] if below else set()
+            found = [c for c in found if c.identifier in allowed]
+
+        terms = [fold(t) for t in query.split()]
+        if terms:
+            found = [c for c in found if all(t in c.search_text for t in terms)]
+
+        total = len(found)
+        start = (page - 1) * size
+        items = [
+            {
+                "identifier": c.identifier,
+                "title": c.title,
+                "description": c.description,
+                "nb_children": c.nb_children,
+                "total_children": c.child_count,
+            }
+            for c in found[start:start + size]
+        ]
+        return jsonify({"total": total, "items": items, "page": page, "size": size, "query": query or None})
+    except Exception as e:
+        current_app.logger.exception("%s failed", request.path)
+        return jsonify({"error": f"Database error: {str(e)}", "total": 0, "items": []}), 500
