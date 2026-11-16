@@ -23,6 +23,19 @@ from dapytains.app.database import db
 from .transformation import media_transformer
 from .constants import basedir
 
+import hashlib
+
+
+def file_hash(path: str, algorithm: str = "sha256") -> str:
+    h = hashlib.new(algorithm)
+    buffer_size = 1024 * 1024  # read in 1 MB chunks
+
+    with open(path, "rb") as f:
+        while chunk := f.read(buffer_size):
+            h.update(chunk)
+
+    return h.hexdigest()
+
 
 @click.group("db")
 def db_group():
@@ -43,15 +56,6 @@ def db_reset():
         db.create_all()
 
 
-@db_group.command("count-children")
-def count_children():
-    """ Populate nb_children """
-    with current_app.app_context():
-        for coll in Collection.query.all():
-            coll.nb_children = coll.total_children
-        db.session.commit()
-
-
 @db_group.command("count-manuscripts")
 def count_manuscripts():
     """ Count total number of manuscripts (resources) in the database """
@@ -67,13 +71,54 @@ def data_group():
     return
 
 
-@data_group.command("catalog-ingest")
+@data_group.group("catalog")
+def catalog_group():
+    """Commands related to the catalog """
+    return
+
+
+from .utils.catalog_building import build as build_catalog
+
+
+catalog_group.add_command(build_catalog)
+
+
+@catalog_group.command("ingest")
 @click.argument("catalog_filepath", type=click.Path(file_okay=True, dir_okay=False, readable=True))
 def ingest(catalog_filepath):
     """Ingest the catalog file to store in the database """
     with current_app.app_context():
         catalog, _ = parse(catalog_filepath)
         store_catalog(catalog)
+
+        for coll in Collection.query.all():
+            coll.nb_children = coll.total_children
+        db.session.commit()
+
+
+@data_group.command("move-filepaths")
+@click.argument("target", type=str)
+@click.argument("replacement", type=str)
+def replace_filepaths(target: str, replacement: str):
+    """
+    Replace TARGET with REPLACEMENT in all Collection.filepath entries.
+    Particularly useful if you compile outside of a docker instance.
+
+    Example:
+        flask data move-filepaths "/old/prefix" "/new/prefix"
+    """
+    from dapytains.app.database import Collection
+    from sqlalchemy import func
+    
+    with current_app.app_context():
+        stmt = (
+            Collection.__table__.update()
+            .where(Collection.filepath.op('LIKE')(f"%{target}%"))
+            .values(filepath=func.replace(Collection.filepath, target, replacement))
+        )
+        result = db.session.execute(stmt)
+        db.session.commit()
+        click.echo(f"Updated {result.rowcount} Collection.filepath entries (bulk).")
 
 
 def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
@@ -102,6 +147,8 @@ def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
         # Retrieve navigation and collection objects
         navigation = Navigation.query.get(navigation_id)
         collection = Collection.query.get(navigation.collection_id)
+
+        sha = file_hash(collection.filepath)
 
         # Iterate over references in navigation
         for tree, references in navigation.references.items():
@@ -139,7 +186,7 @@ def _prerender_collection(params: Tuple[int, List[str], bool]) -> int:
                             media=media_type, tree=tree, content=transformed_content
                         )
                         rendered_content += 1
-    return rendered_content
+    return navigation.collection_id, sha, rendered_content
 
 @data_group.group("prerender")
 def prerender_group():
@@ -169,12 +216,17 @@ def prerender(media_type: List[str], workers: int, force: bool):
 
     mss = 0
     pages = 0
+    hashs = {}
     with multiprocessing.Pool(processes=num_workers) as pool:
-        for generated in pool.imap_unordered(_prerender_collection, [(nav_id, media_type, force) for nav_id in navigations]):
+        for collection_id, sha, generated in pool.imap_unordered(_prerender_collection, [(nav_id, media_type, force) for nav_id in navigations]):
             pages += generated
             mss += 1
+            hashs[collection_id] = sha
             pbar.update(1)
             pbar.set_description(f"Manuscripts done: {mss}. Pages cached: {pages} ({pages/pbar.format_dict['elapsed']:.2f} p/s).")
+
+    with open("shas.json", "w") as f:
+        json.dump(hashs, f)
 
 
 def process_cache(navigation_id: int) -> List[Dict]:
@@ -182,12 +234,88 @@ def process_cache(navigation_id: int) -> List[Dict]:
     from .prerendering import Navigation, DiskPrerenderedCache
     # Fast text extraction using regex (avoid BeautifulSoup overhead)
     import re
+    import xml.etree.ElementTree as ET
 
     returned_values = []
     with current_app.app_context():
         # Retrieve navigation and collection objects
         navigation = Navigation.query.get(navigation_id)
         collection = Collection.query.get(navigation.collection_id)
+
+        dublin_core = collection.dublin_core or {}
+        extensions = collection.extensions or {}
+
+        def get_dc_value(key, default=""):
+            value = dublin_core.get(key, default)
+            if isinstance(value, list):
+                if value and isinstance(value[0], dict):
+                    return [v.get("value", v) if isinstance(v, dict) else v for v in value]
+                return value
+            return value
+
+        metadata = {
+            "collection": collection.identifier,  # Use cache.identifier directly (already available)
+            "title": collection.title or "",
+        }
+
+        if dublin_core:
+            metadata["identifier"] = get_dc_value("identifier", collection.identifier)
+            metadata["publisher"] = get_dc_value("publisher", "")
+            metadata["issued"] = get_dc_value("issued", "")
+            metadata["created"] = get_dc_value("created", "")
+            metadata["relation"] = get_dc_value("relation", "")
+
+            language = get_dc_value("language", "")
+            if isinstance(language, list):
+                metadata["language"] = language
+            else:
+                metadata["language"] = [language] if language else []
+
+            other_langs = extensions.get("otherLanguage", [])
+            if other_langs:
+                if isinstance(other_langs, str):
+                    other_langs = [other_langs]
+                metadata["otherLanguage"] = other_langs
+
+            source = get_dc_value("source", "")
+            if source:
+                metadata["manifest_url"] = source
+
+            extent = get_dc_value("extent", [])
+            if extent and extent != [None]:
+                for item in extent if isinstance(extent, list) else [extent]:
+                    if item:
+                        item_str = str(item)
+                        if "Tokens:" in item_str:
+                            try:
+                                tokens_str = item_str.split("Tokens:")[1].strip().split()[0]
+                                metadata["tokens"] = int(tokens_str)
+                            except (IndexError, ValueError):
+                                pass
+                        if "Acceptable OCRed lines:" in item_str or "OCR" in item_str:
+                            metadata["ocr_quality"] = item_str
+
+            if "tokens" not in metadata or "ocr_quality" not in metadata:
+                catalog_path = os.path.join(basedir, "example_data", "catalog.xml")
+                if os.path.exists(catalog_path):
+                    try:
+                        tree = ET.parse(catalog_path)
+                        root = tree.getroot()
+                        for resource in root.findall(".//resource[@identifier='{}']".format(collection.identifier)):
+                            extent_elem = resource.find(".//extent")
+                            if extent_elem is not None:
+                                for child in extent_elem.findall("extent"):
+                                    text = child.text or ""
+                                    if "Tokens:" in text and "tokens" not in metadata:
+                                        try:
+                                            tokens_str = text.split("Tokens:")[1].strip().split()[0]
+                                            metadata["tokens"] = int(tokens_str)
+                                        except (IndexError, ValueError):
+                                            pass
+                                    if ("Acceptable OCRed lines:" in text or "OCR" in text) and "ocr_quality" not in metadata:
+                                        metadata["ocr_quality"] = text
+                    except Exception:
+                        pass
 
         # Iterate over references in navigation
         for tree, references in navigation.references.items():
@@ -196,6 +324,10 @@ def process_cache(navigation_id: int) -> List[Dict]:
                     collection=collection, ref=ref["identifier"], end=None,
                     media="html", tree=tree
                 )
+                
+                if not prerender:
+                    continue
+                    
                 content_match = re.search(r'<div id="rendered-tei"[^>]*>(.*?)</div>', prerender, re.DOTALL)
                 if content_match:
                     content_html = content_match.group(1)
@@ -204,11 +336,12 @@ def process_cache(navigation_id: int) -> List[Dict]:
                 else:
                     content_text = ""
 
-                returned_values.append({
-                    "collection": collection.identifier,  # Use cache.identifier directly (already available)
-                    "ref": ref["identifier"],
-                    "content": content_text
-                })
+                doc = metadata.copy()
+                doc["ref"] = ref["identifier"]
+                doc["content"] = content_text
+                
+                returned_values.append(doc)
+        
     return returned_values
 
 
@@ -241,7 +374,7 @@ def clear_disk_cache(confirm):
               help="Path where to save the json")
 @click.option("--workers", type=int, default=2, help="Number of workers to use")
 def generate_json(out, workers=2):
-    """Generate a json of {identifier, ref, text} for ElasticSearch ingestion"""
+    """Generate a json of {identifier, ref, text} and metadata for ElasticSearch ingestion"""
     import tqdm
     from dapytains.app.database import Navigation
     data = []

@@ -19,12 +19,13 @@ def manuscripts_route():
         "multi_match": {
             "query": q,
             "fields": [
+                "title^3",
                 "language^3",
-                "location^3",
                 "content",
-                "notes_scopecontent^2",
-                "filename",
-                "ark_portail",
+                "identifier^2",
+                "publisher^2",
+                "created^2",
+                "relation",
                 "manifest_url"
             ],
             "operator": "and",
@@ -37,17 +38,7 @@ def manuscripts_route():
     numbers = re.findall(r'\b\d{3,4}\b', q)  # Find 3-4 digit numbers (likely years)
 
     for num in numbers:
-        year = int(num)
-        text_queries.append({
-            "bool": {
-                "should": [
-                    {"range": {"start_year": {"lte": year, "gte": year - 50}}},
-                    {"range": {"stop_year": {"gte": year, "lte": year + 50}}},
-                    {"term": {"start_year": year}},
-                    {"term": {"stop_year": year}}
-                ]
-            }
-        })
+        text_queries.append({"wildcard": {"created": f"*{num}*"}})
 
     # Combine all queries
     query = {
@@ -63,7 +54,7 @@ def manuscripts_route():
         "aggs": {
             "manuscripts": {
                 "terms": {
-                    "field": "collection.keyword",
+                    "field": "collection",
                     "size": 1000  # Get all unique manuscripts
                 },
                 "aggs": {
@@ -71,16 +62,16 @@ def manuscripts_route():
                         "top_hits": {
                             "size": 1,
                             "_source": [
-                                "collection", "language", "location", "start_year", "stop_year",
-                                "ark_portail", "manifest_url", "tokens", "filename",
-                                "notes_scopecontent", "distrib"
+                                "collection", "title", "language", "created", "issued",
+                                "identifier", "publisher", "relation",
+                                "manifest_url", "tokens", "ocr_quality"
                             ],
                             "highlight": {
                                 "fields": {
+                                    "title": {},
                                     "language": {},
-                                    "location": {},
-                                    "notes_scopecontent": {"fragment_size": 200, "number_of_fragments": 1},
-                                    "filename": {}
+                                    "created": {},
+                                    "publisher": {}
                                 },
                                 "pre_tags": ["<mark class='dts-hit'>"],
                                 "post_tags": ["</mark>"]
@@ -108,27 +99,26 @@ def manuscripts_route():
         highlight = sample_hit.get("highlight", {})
 
         # Get highlighted metadata if available
+        highlighted_title = (highlight.get("title", [None])[0]) or src.get("title", "")
         highlighted_language = (highlight.get("language", [None])[0]) or src.get("language", "")
-        highlighted_location = (highlight.get("location", [None])[0]) or src.get("location", "")
-        highlighted_notes = (highlight.get("notes_scopecontent", [None])[0]) or ""
-        highlighted_filename = (highlight.get("filename", [None])[0]) or src.get("filename", "")
+        highlighted_created = (highlight.get("created", [None])[0]) or src.get("created", "")
+        highlighted_publisher = (highlight.get("publisher", [None])[0]) or src.get("publisher", "")
 
         # Get title from database
-        title = _get_document_title(src)
+        title = highlighted_title or _get_document_title(src)
 
         manuscripts.append({
             "collection": src.get("collection"),
             "title": title,
             "language": highlighted_language,
-            "location": highlighted_location,
-            "start_year": src.get("start_year"),
-            "stop_year": src.get("stop_year"),
-            "ark_portail": src.get("ark_portail"),
+            "created": highlighted_created,
+            "issued": src.get("issued"),
+            "identifier": src.get("identifier"),
+            "publisher": highlighted_publisher,
+            "relation": src.get("relation"),
             "manifest_url": src.get("manifest_url"),
             "tokens": src.get("tokens"),
-            "filename": highlighted_filename,
-            "notes_scopecontent": highlighted_notes,
-            "distrib": src.get("distrib", {}),
+            "ocr_quality": src.get("ocr_quality"),
             "page_count": bucket["page_count"]["value"]
         })
 
@@ -185,9 +175,9 @@ def manuscripts_language_route():
                         "top_hits": {
                             "size": 1,
                             "_source": [
-                                "collection", "language", "location", "start_year", "stop_year",
-                                "ark_portail", "manifest_url", "tokens", "filename",
-                                "notes_scopecontent", "distrib"
+                                "collection", "title", "language", "created", "issued",
+                                "identifier", "publisher", "relation",
+                                "manifest_url", "tokens", "ocr_quality"
                             ],
                             "highlight": {
                                 "fields": {
@@ -227,15 +217,14 @@ def manuscripts_language_route():
             "collection": src.get("collection"),
             "title": title,
             "language": highlighted_language,
-            "location": src.get("location"),
-            "start_year": src.get("start_year"),
-            "stop_year": src.get("stop_year"),
-            "ark_portail": src.get("ark_portail"),
+            "created": src.get("created"),
+            "issued": src.get("issued"),
+            "identifier": src.get("identifier"),
+            "publisher": src.get("publisher"),
+            "relation": src.get("relation"),
             "manifest_url": src.get("manifest_url"),
             "tokens": src.get("tokens"),
-            "filename": src.get("filename"),
-            "notes_scopecontent": src.get("notes_scopecontent"),
-            "distrib": src.get("distrib", {}),
+            "ocr_quality": src.get("ocr_quality"),
             "page_count": bucket["page_count"]["value"]
         })
 
@@ -264,54 +253,35 @@ def manuscripts_date_route():
         return jsonify({"error": "At least one date parameter is required"}), 400
 
     # Build date query
-    date_filters = []
+    date_queries = []
 
     if exact_start:
-        try:
-            exact_start_int = int(exact_start)
-            date_filters.append({"term": {"start_year": exact_start_int}})
-        except ValueError:
-            return jsonify({"error": "exact_start must be a valid year"}), 400
+        date_queries.append({"wildcard": {"created": f"*{exact_start}*"}})
 
     if exact_stop:
-        try:
-            exact_stop_int = int(exact_stop)
-            date_filters.append({"term": {"stop_year": exact_stop_int}})
-        except ValueError:
-            return jsonify({"error": "exact_stop must be a valid year"}), 400
+        date_queries.append({"wildcard": {"created": f"*{exact_stop}*"}})
 
     # Handle range queries
-    range_query = {}
-    if start_year:
+    if start_year or stop_year:
         try:
-            start_year_int = int(start_year)
-            range_query["start_year"] = {"gte": start_year_int}
-        except ValueError:
-            return jsonify({"error": "start_year must be a valid year"}), 400
+            start_int = int(start_year) if start_year else 0
+            stop_int = int(stop_year) if stop_year else 9999
 
-    if stop_year:
-        try:
-            stop_year_int = int(stop_year)
-            if "stop_year" not in range_query:
-                range_query["stop_year"] = {}
-            range_query["stop_year"]["lte"] = stop_year_int
+            for year in range(start_int, min(stop_int + 1, start_int + 1000)):
+                date_queries.append({"wildcard": {"created": f"*{year}*"}})
         except ValueError:
-            return jsonify({"error": "stop_year must be a valid year"}), 400
-
-    # Add range filters if any
-    for field, range_filter in range_query.items():
-        date_filters.append({"range": {field: range_filter}})
+            return jsonify({"error": "Invalid year format"}), 400
 
     # Combine date filters
-    if len(date_filters) == 1:
-        query = date_filters[0]
-    else:
-        query = {
-            "bool": {
-                "should": date_filters,
-                "minimum_should_match": 1
-            }
+    if not date_queries:
+        return jsonify({"error": "No valid date criteria"}), 400
+    
+    query = {
+        "bool": {
+            "should": date_queries,
+            "minimum_should_match": 1
         }
+    } if len(date_queries) > 1 else date_queries[0]
 
     # Aggregate by collection to get manuscript-level results
     body = {
@@ -328,9 +298,9 @@ def manuscripts_date_route():
                         "top_hits": {
                             "size": 1,
                             "_source": [
-                                "collection", "language", "location", "start_year", "stop_year",
-                                "ark_portail", "manifest_url", "tokens", "filename",
-                                "notes_scopecontent", "distrib"
+                                "collection", "title", "language", "created", "issued",
+                                "identifier", "publisher", "relation",
+                                "manifest_url", "tokens", "ocr_quality"
                             ]
                         }
                     },
@@ -359,21 +329,32 @@ def manuscripts_date_route():
         manuscripts.append({
             "collection": src.get("collection"),
             "title": title,
+            "collection": src.get("collection"),
+            "title": title,
             "language": src.get("language"),
-            "location": src.get("location"),
-            "start_year": src.get("start_year"),
-            "stop_year": src.get("stop_year"),
-            "ark_portail": src.get("ark_portail"),
+            "created": src.get("created"),
+            "issued": src.get("issued"),
+            "identifier": src.get("identifier"),
+            "publisher": src.get("publisher"),
+            "relation": src.get("relation"),
             "manifest_url": src.get("manifest_url"),
             "tokens": src.get("tokens"),
-            "filename": src.get("filename"),
-            "notes_scopecontent": src.get("notes_scopecontent"),
-            "distrib": src.get("distrib", {}),
+            "ocr_quality": src.get("ocr_quality"),
             "page_count": bucket["page_count"]["value"]
         })
 
-    # Sort by start_year
-    manuscripts.sort(key=lambda x: x.get("start_year") or 0)
+    # Sort by created year
+    def extract_first_year(created_str):
+        if not created_str:
+            return 0
+        if isinstance(created_str, list):
+            created_str = created_str[0] if created_str else ""
+        try:
+            return int(created_str.split('/')[0])
+        except (ValueError, IndexError):
+            return 0
+    
+    manuscripts.sort(key=lambda x: extract_first_year(x.get("created")))
     total = len(manuscripts)
 
     # Apply pagination
@@ -406,15 +387,15 @@ def manuscripts_range_route():
     else:
         return jsonify({"error": "Invalid date range format. Use 'start-end' (e.g., '800-1400')"}), 400
 
-    # Build date range query - handle cases where stop_year might be empty
-    # Since most documents only have start_year, we'll search for documents where
-    # start_year falls within the requested range
+    # Build date range query
+    date_queries = []
+    for year in range(start_year, min(stop_year + 1, start_year + 1000)):
+        date_queries.append({"wildcard": {"created": f"*{year}*"}})
+    
     query = {
-        "range": {
-            "start_year": {
-                "gte": start_year,
-                "lte": stop_year
-            }
+        "bool": {
+            "should": date_queries,
+            "minimum_should_match": 1
         }
     }
 
@@ -433,9 +414,9 @@ def manuscripts_range_route():
                         "top_hits": {
                             "size": 1,
                             "_source": [
-                                "collection", "language", "location", "start_year", "stop_year",
-                                "ark_portail", "manifest_url", "tokens", "filename",
-                                "notes_scopecontent", "distrib"
+                                "collection", "title", "language", "created", "issued",
+                                "identifier", "publisher", "relation",
+                                "manifest_url", "tokens", "ocr_quality"
                             ]
                         }
                     },
@@ -466,19 +447,33 @@ def manuscripts_range_route():
                 "collection": src.get("collection"),
                 "title": title,
                 "language": src.get("language"),
-                "location": src.get("location"),
-                "start_year": src.get("start_year"),
-                "stop_year": src.get("stop_year"),
-                "ark_portail": src.get("ark_portail"),
+                "created": src.get("created"),
+                "issued": src.get("issued"),
+                "identifier": src.get("identifier"),
+                "publisher": src.get("publisher"),
+                "relation": src.get("relation"),
                 "manifest_url": src.get("manifest_url"),
                 "tokens": src.get("tokens"),
-                "filename": src.get("filename"),
-                "notes_scopecontent": src.get("notes_scopecontent"),
+                "ocr_quality": src.get("ocr_quality"),
                 "page_count": bucket.get("page_count", {}).get("value", 0)
             })
 
-    # Sort by relevance (chronological order by start_year)
-    manuscripts.sort(key=lambda x: x.get("start_year", 9999))
+    # Sort by relevance (chronological order by created year)
+    def extract_first_year(manuscript):
+        created = manuscript.get("created", "")
+        if created and "/" in created:
+            try:
+                return int(created.split('/')[0])
+            except (ValueError, IndexError):
+                return 9999
+        elif created:
+            try:
+                return int(created)
+            except ValueError:
+                return 9999
+        return 9999
+    
+    manuscripts.sort(key=extract_first_year)
     total = len(manuscripts)
 
     # Apply pagination

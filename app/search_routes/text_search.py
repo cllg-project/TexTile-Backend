@@ -21,6 +21,7 @@ def search_route_csv():
     size = request.args.get("size", 25, type=int)
     mode = request.args.get("mode", "exact")
     resource = request.args.get("resource", type=str)
+    language = request.args.get("language", type=str)
     if mode not in {"exact", "fuzzy", "partial"}:
         mode = "exact"
     if not q:
@@ -29,12 +30,18 @@ def search_route_csv():
     # Customize query if needed
     query = build_search_query(q, mode=mode).get("query", {})
 
+    filters = []
     if resource:
-        # wrap the query in a bool query with a filter
+        filters.append({"term": {"collection": resource}})
+    if language:
+        filters.append({"term": {"language": language}})
+    
+    if filters:
+        # wrap the query in a bool query with filters
         query = {
             "bool": {
                 "must": query,
-                "filter": {"term": {"collection": resource}}
+                "filter": filters if len(filters) > 1 else filters[0]
             }
         }
 
@@ -138,6 +145,7 @@ def search_route():
         return search_route_csv()
     q = (request.args.get("q") or "").strip()
     resource = request.args.get("resource")  # limits to one doc if present
+    language = request.args.get("language")
     page = request.args.get("page", 1, type=int)
     size = request.args.get("size", 25, type=int)
     mode = request.args.get("mode", "exact")
@@ -148,12 +156,18 @@ def search_route():
 
     query = build_search_query(q, mode=mode).get("query", {})
 
+    filters = []
     if resource:
-        # wrap the query in a bool query with a filter
+        filters.append({"term": {"collection": resource}})
+    if language:
+        filters.append({"term": {"language": language}})
+    
+    if filters:
+        # wrap the query in a bool query with filters
         query = {
             "bool": {
                 "must": query,
-                "filter": {"term": {"collection": resource}}
+                "filter": filters if len(filters) > 1 else filters[0]
             }
         }
 
@@ -169,7 +183,7 @@ def search_route():
             "pre_tags": ["<mark class='dts-hit'>"],
             "post_tags": ["</mark>"],
         },
-        "_source": ["collection", "ref", "content", "location", "filename", "notes_scopecontent"],
+        "_source": ["collection", "ref", "content", "title", "identifier", "publisher", "created", "relation"],
     }
 
     res = es.search(index=INDEX, body=body)
@@ -230,7 +244,7 @@ def hybrid_search_route():
             "pre_tags": ["<mark class='text-hit'>"],
             "post_tags": ["</mark>"],
         },
-        "_source": ["collection", "ref", "content", "location", "filename", "notes_scopecontent"],
+        "_source": ["collection", "ref", "content", "title", "identifier", "publisher", "created", "relation"],
     }
 
     try:
