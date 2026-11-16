@@ -8,11 +8,46 @@ import uritemplate
 
 from flask import Response, request, url_for, Flask
 
-from dapytains.app.app import msg_4xx, inject_json, get_templates
+import dapytains.app.app as dts_app
+from dapytains.app.app import CONTEXT_URL, DTS_VERSION, msg_4xx, inject_json
 from dapytains.app.database import Collection, db
 
 
-PAGINATION_SIZE = os.getenv("PAGINATION_SIZE", 20)
+PAGINATION_SIZE = int(os.getenv("PAGINATION_SIZE", "20"))
+
+# The library's own implementation, captured before install_templates() replaces it
+_library_get_templates = dts_app.get_templates
+
+
+def get_templates(base_uri: str):
+    """
+    DTS URI templates, with the `page` parameter on the collection endpoint since this API
+    paginates collections (the DTS 1.0 specification lists it: `{?id,page,nav}`). dapytains
+    itself only advertises `{?id}{&nav}`.
+
+    Written `{?id}{&page,nav}`, which is the same template (RFC 6570) but keeps the remaining
+    variables when a link is partially expanded for one collection (`...?id=x{&page,nav}`).
+    """
+    _, document_template, navigation_template = _library_get_templates(base_uri)
+    collection_template = uritemplate.URITemplate(base_uri + "collection/{?id}{&page,nav}")
+    return collection_template, document_template, navigation_template
+
+
+def install_templates():
+    """
+    Make dapytains' own routes (entry point, navigation) use get_templates() above too.
+    They look the function up in their module at call time, so replacing it is enough.
+    """
+    dts_app.get_templates = get_templates
+
+
+def _member_json(member: Collection, templates) -> Dict:
+    """A DTS member. Our own `nb_children` goes in `extensions`, where the DTS spec puts custom properties."""
+    data = member.json(inject=inject_json(member, templates=templates))
+    count = getattr(member, "nb_children", None)
+    if count is not None:
+        data["extensions"] = {**data.get("extensions", {}), "nb_children": [count]}
+    return data
 
 
 def collection_view(
@@ -82,9 +117,11 @@ def collection_view(
 
     members = pagination.items
     last_page = pagination.pages if pagination.pages > 0 else 1
+    if page > last_page:
+        return msg_4xx(f"Page {page} does not exist, the last page is {last_page}")
 
     def page_url(p):
-        return url_for("collection_route", id=coll.identifier, nav=nav, page=p, sort_by=sort_by, sort_order=sort_order, _external=False)
+        return url_for("collection_route", id=coll.identifier, nav=nav, page=p, sort_by=sort_by, sort_order=sort_order, _external=True)
 
     view = {
         "@id": page_url(page),
@@ -98,16 +135,10 @@ def collection_view(
         view["next"] = page_url(pagination.next_num)
 
     return Response(json.dumps({
-        "@context": "https://distributed-text-services.github.io/specifications/context/1-alpha1.json",
-        "dtsVersion": "1-alpha",
+        "@context": CONTEXT_URL,
+        "dtsVersion": DTS_VERSION,
         **out,
-        "member": [
-            {
-                **member.json(inject=inject_json(member, templates=templates)),
-                "nb_children": getattr(member, 'nb_children', None)
-            }
-            for member in members
-        ],
+        "member": [_member_json(member, templates) for member in members],
         **inject_json(coll, templates=templates),
         "view": view
     }, ), mimetype="application/ld+json", status=200)

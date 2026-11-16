@@ -35,6 +35,10 @@ else:
 
 CORS(app, origins=allowed_origins)
 
+# Links in API responses follow the public address of the site (see app/public_url.py)
+from .public_url import configure_public_url
+configure_public_url(app)
+
 # Database configuration
 default_db_path = os.path.join(basedir, 'app.db')
 db_path = os.environ.get('DATABASE_PATH', default_db_path)
@@ -44,11 +48,12 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 # Importing our customization
 from .search_routes import add_search_routes
 from .prerendering import CustomXSLTransformer, change_document_route, DiskPrerenderedCache
-from .paginated_collection import change_collection_route
+from .paginated_collection import change_collection_route, install_templates
 from .transformation import media_transformer
 from .cli import register_cli
 
 _, db = create_app(app, media_transformer=media_transformer)
+install_templates()
 
 from .db_changes import apply_db_changes
 apply_db_changes(db)

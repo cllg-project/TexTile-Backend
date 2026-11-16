@@ -1,5 +1,5 @@
 flask
-dapytains @ git+https://github.com/distributed-text-services/MyDapytains
+dapytains @ git+https://github.com/distributed-text-services/MyDapytains@1.0.0rc4
 requests
 tqdm
 beautifulsoup4
