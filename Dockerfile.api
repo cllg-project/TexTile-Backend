@@ -22,6 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY assets/ ./assets/
 COPY gunicorn.conf.py .
+COPY es_indexer_textile.py migrate.py update_extent_in_db.py update_source_in_db.py ./
 # Configuration is injected at runtime (docker run --env-file .env ...), never baked into the image
 
 # Create necessary directories
