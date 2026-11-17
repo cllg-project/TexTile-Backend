@@ -134,7 +134,8 @@ def test_counts_forms_and_relative_frequencies(client, es):
     assert data["tokens_in_scope"] == 45000                      # unknown token counts do not add anything
     assert data["per10k"] == 0.89                                # 4 / 45000 * 10000
     # forms are case-folded but keep their diacritics
-    assert data["forms"] == [{"form": "dominus", "occurrences": 4, "share": 100.0}]
+    [form] = data["forms"]
+    assert (form["form"], form["occurrences"], form["share"], form["per10k"]) == ("dominus", 4, 100.0, 0.89)
     assert data["distinct_forms"] == 1 and data["truncated"] is False
     assert fake.closed == ["pit-1"]
 
@@ -260,3 +261,44 @@ def test_json_page_beyond_the_search_window_points_to_the_csv(client, es):
 def test_json_q_is_required(client, es):
     es([])
     assert client.get("/concordance/?format=json").status_code == 400
+
+
+@pytest.mark.parametrize("language,expected", [
+    (["lat", "fro"], "lat"), (["", "lat"], "lat"), ([None, "lat"], "lat"),
+    ([None, ""], "und"), ([], "und"), ("fro", "fro"), (None, "und"), ("", "und"),
+])
+def test_first_language_skips_empty_values(language, expected):
+    assert ts.first_language(language) == expected
+
+
+def test_each_form_has_its_own_statistics(client, es):
+    # ms-a: 10000 tokens, 13th c., lat. ms-c: unknown tokens, 15th c., fre (see the fake scope)
+    es([page("ms-a", f"{O}deus{C} {O}deus{C} {O}deum{C}"), page("ms-c", f"{O}deum{C}")])
+    data = stats(client, q="deus,deum").get_json()
+    deus, deum = data["forms"]                                    # most frequent first; ties alphabetical below
+
+    assert (deus["form"], deus["occurrences"], deus["share"]) == ("deus", 2, 50.0)
+    assert (deum["form"], deum["occurrences"], deum["share"]) == ("deum", 2, 50.0)
+    assert deus["manuscripts_with_hits"] == 1 and deum["manuscripts_with_hits"] == 2
+    assert [(r["collection"], r["occurrences"]) for r in deus["by_manuscript"]] == [("ms-a", 2)]
+    assert deus["by_manuscript"][0]["per10k"] == 2.0
+    assert [(r["collection"], r["occurrences"]) for r in deum["by_manuscript"]] == [("ms-a", 1), ("ms-c", 1)]
+
+    centuries = {c["century"]: c for c in deus["by_century"]}
+    assert centuries[13]["occurrences"] == 2 and centuries[13]["per10k"] == 2.0
+    assert centuries[15]["occurrences"] == 0                      # in the corpus, absent for this form
+    assert [c["century"] for c in deum["by_century"]] == [c["century"] for c in deus["by_century"]]
+    languages = {l["language"]: l["occurrences"] for l in deum["by_language"]}
+    assert languages["lat"] == 1 and languages["fre"] == 1
+
+    # the forms partition the overall figures
+    assert sum(f["occurrences"] for f in data["forms"]) == data["occurrences"]
+
+
+def test_csv_has_per_form_rows_only_for_several_forms(client, es):
+    es([page("ms-a", f"{O}deus{C} {O}deum{C}")])
+    rows = [list(r) for r in ts.stats_csv_rows(stats(client, q="deus,deum").get_json())]
+    assert {"form_manuscript", "form_century", "form_language"} <= {r[0] for r in rows}
+    es([page("ms-a", f"{O}x{C}")])
+    rows = [list(r) for r in ts.stats_csv_rows(stats(client, q="x").get_json())]
+    assert not any(r[0].startswith("form_") for r in rows)

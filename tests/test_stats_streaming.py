@@ -60,7 +60,8 @@ def test_progress_events_carry_the_figures_so_far(monkeypatch, es):
     progress = [e for e in out if e["type"] == "progress"]
     assert [p["pages"] for p in progress] == [1, 2] and progress[0]["total_pages"] == 2
     assert [p["occurrences"] for p in progress] == [1, 3]
-    assert progress[0]["stats"]["forms"] == [{"form": "x", "occurrences": 1, "share": 100.0}]
+    [form] = progress[0]["stats"]["forms"]
+    assert (form["form"], form["occurrences"], form["share"]) == ("x", 1, 100.0)
     assert out[-1]["type"] == "done" and out[-1]["stats"]["occurrences"] == 3
 
 
@@ -217,7 +218,8 @@ def test_the_count_is_exact_when_the_limit_falls_inside_a_page(client, es):
     done = events(client, limit=3)[-1]["stats"]
     assert done["occurrences"] == 3                                     # not 5: the page is cut at the limit
     assert done["truncated"] is True and done["truncated_reason"] == "occurrences" and done["limit"] == 3
-    assert done["forms"] == [{"form": "x", "occurrences": 3, "share": 100.0}]
+    [form] = done["forms"]
+    assert (form["form"], form["occurrences"], form["share"]) == ("x", 3, 100.0)
     assert done["by_manuscript"][0]["occurrences"] == 3
 
 

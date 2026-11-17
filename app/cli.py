@@ -229,6 +229,13 @@ def prerender(media_type: List[str], workers: int, force: bool):
         json.dump(hashs, f)
 
 
+def clean_values(value) -> List:
+    """A metadata value as a list, without empty entries (they would reach the index and the API)."""
+    if not isinstance(value, list):
+        value = [value]
+    return [v for v in value if v]
+
+
 def process_cache(navigation_id: int) -> List[Dict]:
     # Each process creates its own session
     from .prerendering import Navigation, DiskPrerenderedCache
@@ -265,17 +272,13 @@ def process_cache(navigation_id: int) -> List[Dict]:
             metadata["created"] = get_dc_value("created", "")
             metadata["relation"] = get_dc_value("relation", "")
 
-            language = get_dc_value("language", "")
-            if isinstance(language, list):
-                metadata["language"] = language
-            else:
-                metadata["language"] = [language] if language else []
+            metadata["language"] = clean_values(get_dc_value("language", ""))
 
             other_langs = extensions.get("otherLanguage", [])
             if other_langs:
-                if isinstance(other_langs, str):
-                    other_langs = [other_langs]
-                metadata["otherLanguage"] = other_langs
+                other_langs = clean_values(other_langs)
+                if other_langs:
+                    metadata["otherLanguage"] = other_langs
 
             source = get_dc_value("source", "")
             if source:

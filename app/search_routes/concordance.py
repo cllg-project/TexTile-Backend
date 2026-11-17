@@ -41,6 +41,9 @@ DEFAULT_WIDTH = 40
 MAX_WIDTH = 200
 BATCH_SIZE = 100
 MAX_ROWS = int(os.getenv("CONCORDANCE_MAX_ROWS", "100000"))
+DEFAULT_PAGE_SIZE = 50   # matching pages (folios) per page of the JSON view; their rows come with them
+MAX_PAGE_SIZE = 100
+RESULT_WINDOW = 10000    # Elasticsearch's default `from + size` limit: deeper pages cannot be read
 
 HEADER = ["collection", "manuscript", "ref", "line", "left", "keyword", "right", "language", "date"]
 _HIGHLIGHT = {
@@ -146,7 +149,7 @@ def rows_for_hit(hit: Dict, width: int, merge_adjacent: bool = True) -> Iterator
             occ.left,
             occ.keyword,
             occ.right,
-            ", ".join(src["language"]) if isinstance(src.get("language"), list) else (src.get("language") or ""),
+            ", ".join([l for l in src["language"] if l]) if isinstance(src.get("language"), list) else (src.get("language") or ""),
             _first(src.get("created")),
         ]
 
@@ -277,7 +280,10 @@ def concordance_page(query: Dict, page: int, size: int, width: int, merge_adjace
     })
     total = res["hits"]["total"]["value"]
     rows = [dict(zip(HEADER, row)) for hit in res["hits"]["hits"] for row in rows_for_hit(hit, width, merge_adjacent)]
-    return {"rows": rows, "page": page, "size": size, "total_pages": total, "pages": max(1, -(-total // size))}
+    reachable = max(1, RESULT_WINDOW // size)       # pages whose `from + size` fits in the window
+    return {"rows": rows, "page": page, "size": size, "total_pages": total,
+            "pages": max(1, min(-(-total // size), reachable)),
+            "capped": total > reachable * size}     # more matching pages than the view can reach: export the CSV
 
 
 def concordance_route():
@@ -290,8 +296,8 @@ def concordance_route():
 
     if request.args.get("format") == "json":
         page = max(1, request.args.get("page", 1, type=int))
-        size = max(1, min(request.args.get("size", 20, type=int), 100))
-        if (page - 1) * size >= 10000:  # Elasticsearch's default result window
+        size = max(1, min(request.args.get("size", DEFAULT_PAGE_SIZE, type=int), MAX_PAGE_SIZE))
+        if page * size > RESULT_WINDOW:  # Elasticsearch refuses `from + size` beyond its result window
             return jsonify({"error": "Page out of range; export the CSV for the full concordance"}), 400
         return jsonify(concordance_page(query, page, size, width, has_phrase(q)))
 

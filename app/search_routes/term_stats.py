@@ -59,6 +59,13 @@ PROGRESS_INTERVAL = float(os.getenv("STATS_PROGRESS_INTERVAL", "0.5"))
 _PER = 10000
 
 
+def first_language(language) -> str:
+    """The first non-empty language of a document ("und" when there is none)."""
+    if isinstance(language, list):
+        language = next((l for l in language if l), None)
+    return language or "und"
+
+
 def per_10k(occurrences: int, tokens: Optional[int]) -> Optional[float]:
     return round(occurrences / tokens * _PER, 2) if tokens else None
 
@@ -109,7 +116,7 @@ def _scope_manuscripts(generation: str, scope_json: str) -> Dict[str, Dict]:
             out[key] = {
                 "title": src.get("title") or key,
                 "tokens": int(bucket["tokens"]["value"]) if bucket["tokens"]["value"] is not None else None,
-                "language": (language[0] if isinstance(language, list) and language else language) or "und",
+                "language": first_language(language),
                 "date_start": src.get("date_start"),
                 "date_end": src.get("date_end"),
                 "pages": bucket["doc_count"],
@@ -143,6 +150,7 @@ class Accumulator:
     def __init__(self, scope: Dict[str, Dict]):
         self.scope = scope
         self.forms: Counter = Counter()
+        self.form_manuscripts: Dict[str, Counter] = defaultdict(Counter)  # form -> manuscript -> occurrences
         self.per_manuscript: Counter = Counter()
         self.pages_scanned = 0
         self.pages_with_hits = 0
@@ -159,9 +167,48 @@ class Accumulator:
         self.pages_with_hits += 1
         collection = hit["_source"]["collection"]
         for occ in found:
-            self.forms[occ.keyword.lower()] += 1
+            form = occ.keyword.lower()
+            self.forms[form] += 1
+            self.form_manuscripts[form][collection] += 1
             self.per_manuscript[collection] += 1
             self.occurrences += 1
+
+    def _form_detail(self, form: str, n: int, total: int, scope_tokens: int, by_century: Dict, by_language: Dict) -> Dict:
+        """
+        One form's own figures, shaped like the overall ones: relative frequency, distribution by
+        century and language (against the same token totals) and its top manuscripts.
+        Only manuscripts where the form occurs are visited, so this stays cheap on a large scope.
+        """
+        centuries: Counter = Counter()
+        languages: Counter = Counter()
+        manuscripts = []
+        for key, count in self.form_manuscripts[form].items():
+            m = self.scope.get(key)
+            if m:
+                centuries[century(m["date_start"], m["date_end"])] += count
+                languages[m["language"]] += count
+            manuscripts.append({"collection": key, "title": m["title"] if m else key, "occurrences": count,
+                                "tokens": m["tokens"] if m else None,
+                                "per10k": per_10k(count, m["tokens"]) if m else None})
+        manuscripts.sort(key=lambda r: (-r["occurrences"], r["title"]))
+
+        def rows(counts: Counter, totals: Dict, label: str):
+            # every century / language of the scope, like the overall figures, so forms line up with each other
+            return [{label: k, "occurrences": counts.get(k, 0), "tokens": v["tokens"],
+                     "per10k": per_10k(counts.get(k, 0), v["tokens"])} for k, v in totals.items()]
+
+        return {
+            "form": form,
+            "occurrences": n,
+            "share": round(n / total * 100, 1) if total else 0,
+            "per10k": per_10k(n, scope_tokens),
+            "manuscripts_with_hits": len(manuscripts),
+            "undated_occurrences": centuries.get(None, 0),
+            "by_century": sorted((r for r in rows(centuries, by_century, "century") if r["century"] is not None),
+                                 key=lambda r: r["century"]),
+            "by_language": sorted(rows(languages, by_language, "language"), key=lambda r: (-r["occurrences"], r["language"])),
+            "by_manuscript": manuscripts[:TOP_MANUSCRIPTS],
+        }
 
     def snapshot(self, truncated_reason: Optional[str] = None) -> Dict:
         total = self.occurrences
@@ -189,6 +236,8 @@ class Accumulator:
             return [{label: k, **v, "per10k": per_10k(v["occurrences"], v["tokens"])} for k, v in buckets.items()]
 
         undated = by_century.get(None)
+        forms = [self._form_detail(form, n, total, scope_tokens, by_century, by_language)
+                 for form, n in self.forms.most_common(TOP_FORMS)]
         return {
             "occurrences": total,
             "matching_pages": self.pages_with_hits,
@@ -199,8 +248,7 @@ class Accumulator:
             "truncated": truncated_reason is not None,
             "truncated_reason": truncated_reason,
             "undated_occurrences": undated["occurrences"] if undated else 0,
-            "forms": [{"form": f, "occurrences": n, "share": round(n / total * 100, 1) if total else 0}
-                      for f, n in self.forms.most_common(TOP_FORMS)],
+            "forms": forms,
             "distinct_forms": len(self.forms),
             "by_manuscript": by_manuscript[:TOP_MANUSCRIPTS],
             "by_century": sorted((r for r in distribution(by_century, "century") if r["century"] is not None),
@@ -262,6 +310,14 @@ def stats_csv_rows(stats: Dict) -> Iterable[List]:
         yield ["century", r["century"], r["occurrences"], r["per10k"], r["tokens"]]
     for r in stats["by_language"]:
         yield ["language", r["language"], r["occurrences"], r["per10k"], r["tokens"]]
+    if len(stats["forms"]) > 1:  # a multi-form search: each form's own distributions
+        for f in stats["forms"]:
+            for r in f["by_manuscript"]:
+                yield ["form_manuscript", f"{f['form']} / {r['title']}", r["occurrences"], r["per10k"], r["tokens"]]
+            for r in f["by_century"]:
+                yield ["form_century", f"{f['form']} / {r['century']}", r["occurrences"], r["per10k"], r["tokens"]]
+            for r in f["by_language"]:
+                yield ["form_language", f"{f['form']} / {r['language']}", r["occurrences"], r["per10k"], r["tokens"]]
 
 
 def _line(event: Dict) -> str:
@@ -293,7 +349,7 @@ def stats_route():
         return jsonify({"error": "format must be json, csv or ndjson"}), 400
     limit = max(1, min(request.args.get("limit", STATS_MAX_OCCURRENCES, type=int), STATS_MAX_OCCURRENCES))
     cache_key = {
-        "q": q, "mode": mode, "limit": limit, "generation": index_generation(),
+        "v": 2, "q": q, "mode": mode, "limit": limit, "generation": index_generation(),
         **{name: request.args.get(name) or "" for name in ("language", "resource", "within")},
     }
 

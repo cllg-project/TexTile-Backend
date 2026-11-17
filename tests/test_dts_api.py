@@ -120,3 +120,34 @@ def test_unknown_collection_is_a_404_message(client):
 def test_bad_nav_is_a_400_message(client):
     response = client.get("/collection/?id=parent&nav=sideways")
     assert response.status_code == 400 and "message" in response.get_json()
+
+
+# ---- order of the children -----------------------------------------------------
+
+@pytest.fixture
+def sized(hierarchy):
+    """parent's children with sizes: child1=5, child2=10, child3=5 (a tie with child1)."""
+    from dapytains.app.database import Collection, db
+    with hierarchy.app_context():
+        for identifier, size in (("child1", 5), ("child2", 10), ("child3", 5)):
+            Collection.query.filter_by(identifier=identifier).one().nb_children = size
+        db.session.commit()
+    return hierarchy.test_client()
+
+
+def ids(client, url):
+    return [m["@id"] for m in client.get(url).get_json()["member"]]
+
+
+def test_children_default_to_largest_first_then_alphabetical(sized):
+    assert ids(sized, "/collection/?id=parent") == ["child2", "child1", "child3"]
+
+
+def test_size_order_breaks_ties_alphabetically_in_both_directions(sized):
+    assert ids(sized, "/collection/?id=parent&sort_by=nb_children&sort_order=desc") == ["child2", "child1", "child3"]
+    assert ids(sized, "/collection/?id=parent&sort_by=nb_children&sort_order=asc") == ["child1", "child3", "child2"]
+
+
+def test_title_order_is_still_available(sized):
+    assert ids(sized, "/collection/?id=parent&sort_by=title") == ["child1", "child2", "child3"]
+    assert ids(sized, "/collection/?id=parent&sort_by=title&sort_order=desc") == ["child3", "child2", "child1"]

@@ -97,3 +97,21 @@ def test_range_endpoint_uses_overlap_on_numeric_fields(client, captured):
     filters = captured[0]["query"]["bool"]["filter"]
     assert {"range": {"date_end": {"gte": 1200}}} in filters
     assert {"range": {"date_start": {"lte": 1300}}} in filters
+
+
+# ---- values that may be null in the index --------------------------------------
+
+@pytest.mark.parametrize("content,expected", [
+    (None, ""), ("", ""), ("short", "short"), ("x" * 200, "x" * 200), ("x" * 201, "x" * 200 + "..."),
+])
+def test_excerpt_tolerates_null_content(content, expected):
+    from app.search_routes.text_search import excerpt
+    assert excerpt(content) == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    (["lat", "", None, "fro"], ["lat", "fro"]), ("lat", ["lat"]), ("", []), (None, []), ([], []),
+])
+def test_clean_values_drops_empty_metadata(value, expected):
+    from app.cli import clean_values
+    assert clean_values(value) == expected

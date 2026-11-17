@@ -80,6 +80,34 @@ def test_filename_is_ascii_and_safe():
     assert cc._filename("???") == "concordance.csv"
 
 
+def test_neighbouring_hits_are_separate_occurrences_without_a_phrase():
+    # `deus,deum` on "deus deum": two hits, not one merged keyword
+    occs = cc.extract_occurrences(f"{O}deus{C} {O}deum{C}", width=5, merge_adjacent=False)
+    assert [o.keyword for o in occs] == ["deus", "deum"]
+
+
+@pytest.mark.parametrize("q,expected", [
+    ('"la bouche"', True), ('deus, "la bouche"', True), ('"bouche"', False),
+    ("la bouche", False), ("deus,deum", False), ('""', False),
+])
+def test_has_phrase_only_for_quoted_multi_word_queries(q, expected):
+    assert cc.has_phrase(q) is expected
+
+
+@pytest.mark.parametrize("language,expected", [
+    (["lat", "", "fro"], "lat, fro"),
+    (["lat", None], "lat"),       # ", ".join used to raise TypeError on None
+    ([None, ""], ""),
+    ([], ""),
+    ("lat", "lat"),
+    (None, ""),
+])
+def test_language_column_tolerates_empty_and_missing_values(language, expected):
+    hit_ = {"_source": {"language": language}, "highlight": {"content": [f"{O}x{C}"]}}
+    [row] = cc.rows_for_hit(hit_, 5)
+    assert row[7] == expected
+
+
 # ---- the streamed endpoint ---------------------------------------------------
 
 class FakeES:
@@ -234,6 +262,67 @@ def test_search_csv_export_uses_the_concordance(client, fake):
     fake([hit("f1", f"a {O}x{C} b")])
     rows = parse(client.get("/search/?q=x&format=csv"))
     assert rows[0] == cc.HEADER and rows[1][5] == "x"
+
+
+def test_json_page_has_rows_and_paging_metadata(client, fake, monkeypatch):
+    seen = {}
+
+    class PagedES(FakeES):
+        def search(self, index=None, body=None):
+            seen.update(body)
+            return {"hits": {"total": {"value": 45}, "hits": [hit("f1", f"a {O}x{C} b", n=1)]}}
+
+    monkeypatch.setattr(cc, "es", PagedES([]))
+    data = client.get("/concordance/?q=x&format=json&page=2&size=20").get_json()
+    assert seen["from"] == 20 and seen["size"] == 20
+    assert data["pages"] == 3 and data["page"] == 2
+    assert data["rows"][0]["keyword"] == "x" and data["rows"][0]["ref"] == "f1"
+
+
+def test_json_page_beyond_the_result_window_is_rejected(client, fake):
+    es = fake()
+    response = client.get("/concordance/?q=x&format=json&page=101&size=100")
+    assert response.status_code == 400 and es.searches == []
+
+
+def paged(monkeypatch, total):
+    seen = {}
+
+    class PagedES(FakeES):
+        def search(self, index=None, body=None):
+            seen.update(body)
+            return {"hits": {"total": {"value": total}, "hits": []}}
+
+    monkeypatch.setattr(cc, "es", PagedES([]))
+    return seen
+
+
+def test_json_page_defaults_to_50_matching_pages(client, monkeypatch):
+    seen = paged(monkeypatch, 120)
+    data = client.get("/concordance/?q=x&format=json").get_json()
+    assert seen["size"] == 50 and data["size"] == 50 and data["pages"] == 3 and data["capped"] is False
+
+
+@pytest.mark.parametrize("size,pages", [(100, 100), (50, 200), (25, 400), (30, 333)])
+def test_pages_offered_never_exceed_the_result_window(client, monkeypatch, size, pages):
+    paged(monkeypatch, 45000)
+    data = client.get(f"/concordance/?q=x&format=json&size={size}").get_json()
+    assert data["pages"] == pages and data["capped"] is True
+    assert data["pages"] * size <= cc.RESULT_WINDOW
+
+
+def test_every_offered_page_can_be_opened_and_the_next_cannot(client, monkeypatch):
+    # size 30: page 333 ends at 9,990 (fits), page 334 would end at 10,020 (Elasticsearch would refuse it)
+    seen = paged(monkeypatch, 45000)
+    assert client.get("/concordance/?q=x&format=json&size=30&page=333").status_code == 200
+    assert seen["from"] == 9960
+    assert client.get("/concordance/?q=x&format=json&size=30&page=334").status_code == 400
+
+
+def test_a_result_that_fits_the_window_is_not_capped(client, monkeypatch):
+    paged(monkeypatch, 10000)
+    data = client.get("/concordance/?q=x&format=json&size=100").get_json()
+    assert data["pages"] == 100 and data["capped"] is False
 
 
 # ---- indexing: reading order -------------------------------------------------

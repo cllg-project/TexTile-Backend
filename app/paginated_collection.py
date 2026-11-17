@@ -88,30 +88,19 @@ def collection_view(
     else:
         return msg_4xx(f"nav parameter has a wrong value {nav}", code=400)
 
-    # Apply sorting based on parameters
-    if sort_by == "title" or sort_by == "alphabetical":
-        if sort_order == "desc":
-            query = query.order_by(Collection.title.desc())
-        else:
-            query = query.order_by(Collection.title)
-    elif sort_by == "nb_children" or sort_by == "children":
-        if sort_order == "desc":
-            query = query.order_by(Collection.nb_children.desc())
-        else:
-            query = query.order_by(Collection.nb_children)
-    else:  # default sorting
-        if nav == 'children':
-            # Default for children: nb_children first, then title
-            if sort_order == "desc":
-                query = query.order_by(Collection.nb_children.desc(), Collection.title.desc())
-            else:
-                query = query.order_by(Collection.nb_children, Collection.title)
-        else:  # parents
-            # Default for parents: title only
-            if sort_order == "desc":
-                query = query.order_by(Collection.title.desc())
-            else:
-                query = query.order_by(Collection.title)
+    # Sorting. Ties are always broken alphabetically (ascending), whatever the direction asked for.
+    title_order = Collection.title.desc() if sort_order == "desc" else Collection.title
+    if sort_by in ("title", "alphabetical"):
+        query = query.order_by(title_order)
+    elif sort_by in ("nb_children", "children"):
+        size_order = Collection.nb_children.desc() if sort_order == "desc" else Collection.nb_children
+        query = query.order_by(size_order, Collection.title)
+    elif nav == "children":
+        # Default for children: largest first, then alphabetical
+        query = query.order_by(Collection.nb_children.desc(), Collection.title)
+    else:
+        # Default for parents: title only
+        query = query.order_by(title_order)
 
     pagination = query.paginate(page=page, per_page=PAGINATION_SIZE, error_out=False)
 

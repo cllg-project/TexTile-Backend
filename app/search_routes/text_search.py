@@ -4,6 +4,12 @@ from .config import _get_document_title, es, INDEX
 from .query_builder import build_search_query
 
 
+def excerpt(content, length: int = 200) -> str:
+    """The first `length` characters of a page text; the stored content may be missing or null."""
+    content = content or ""
+    return content[:length] + "..." if len(content) > length else content
+
+
 def get_vector_model():
     return None
 
@@ -130,8 +136,7 @@ def hybrid_search_route():
                 "collection": src.get("collection"),
                 "ref": src.get("ref"),
                 "title": title,
-                "content": src.get("content", "")[:200] + "..." if len(src.get("content", "")) > 200 else src.get(
-                    "content", ""),
+                "content": excerpt(src.get("content")),
                 "snippet": (h.get("highlight", {}).get("content", [None])[0]) or "",
                 "score": h["_score"],
                 "search_type": "text"
